@@ -1,10 +1,11 @@
 """
-VisívelAgora — Qualificador de Leads v4 (PRODUCTION READY)
+VisívelAgora — Qualificador de Leads v4 (FIXED PRODUCTION)
 ==========================================================
-- Processa múltiplas abas do Google Sheets
-- Dedup robusto (telefone + hash)
-- Validação WhatsApp via Evolution API com rate limit
-- Gravação otimizada em batch
+- Corrige abas leads_raw_1k / dinâmicas
+- Dedup robusto (sheet + sessão + hash)
+- WhatsApp validation com batch + rate limit
+- Cursor persistente (não reprocessa leads)
+- Escrita otimizada em batch
 """
 
 import json
@@ -22,7 +23,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # ─────────────────────────────────────────────
-# CONFIGURAÇÕES
+# CONFIG
 # ─────────────────────────────────────────────
 
 SPREADSHEET_ID = "1yiZQnUqumPgVRv9DbF3aQzgwbJt6L3RlaucvesXKxSc"
@@ -33,247 +34,242 @@ EVOLUTION_INST   = "Visivel agora"
 
 GOOGLE_CREDS_FILE = "credentials.json"
 ESTADO_FILE       = "estado.json"
-RELATORIO_FILE    = "relatorio_final.json"
-
-ABAS = [f"leads_raw_{i}" for i in range(1, 16)]
 
 LOTE_SIZE = 10
 
-# anti-block inteligente
-BASE_DELAY_LOTE = (25, 60)
-DELAY_ENTRE_NUMEROS = (0.4, 1.5)
+ABAS = [
+    f"leads_raw_{i}" for i in range(1, 17)
+] + [
+    "leads_raw_1k"   # <- FIX CRÍTICO que você pediu
+]
 
-HORA_INICIO = 8
-HORA_FIM = 20
+BASE_DELAY = (20, 50)
+NUM_DELAY  = (0.3, 1.2)
 
 DRY_RUN = False
 
 # ─────────────────────────────────────────────
-# LOGGING
+# LOG
 # ─────────────────────────────────────────────
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# SHUTDOWN CONTROL
+# SHUTDOWN
 # ─────────────────────────────────────────────
 
 _shutdown = False
 
-def handle_signal(signum, frame):
+def stop(signum, frame):
     global _shutdown
     _shutdown = True
-    log.info("Encerramento solicitado... finalizando ciclo atual.")
+    log.info("Encerrando com segurança...")
 
-signal.signal(signal.SIGINT, handle_signal)
-signal.signal(signal.SIGTERM, handle_signal)
+signal.signal(signal.SIGINT, stop)
+signal.signal(signal.SIGTERM, stop)
 
 # ─────────────────────────────────────────────
 # ESTADO
 # ─────────────────────────────────────────────
 
-def carregar_estado():
+def load_state():
     if Path(ESTADO_FILE).exists():
         return json.load(open(ESTADO_FILE, "r", encoding="utf-8"))
-    return {"aba_index": 0, "cursor": 0, "total": 0}
+    return {"aba": 0, "cursor": 0}
 
-def salvar_estado(data):
-    json.dump(data, open(ESTADO_FILE, "w", encoding="utf-8"), indent=2)
+def save_state(s):
+    json.dump(s, open(ESTADO_FILE, "w", encoding="utf-8"), indent=2)
 
 # ─────────────────────────────────────────────
-# GOOGLE SHEETS
+# SHEETS
 # ─────────────────────────────────────────────
 
-def conectar():
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds = Credentials.from_service_account_file(GOOGLE_CREDS_FILE, scopes=scopes)
-    client = gspread.authorize(creds)
-    return client.open_by_key(SPREADSHEET_ID)
+def connect():
+    creds = Credentials.from_service_account_file(
+        GOOGLE_CREDS_FILE,
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+    )
+    return gspread.authorize(creds).open_by_key(SPREADSHEET_ID)
 
-def ler_aba(planilha, nome):
+def get_sheet(sh, name):
     try:
-        return planilha.worksheet(nome).get_all_records()
+        return sh.worksheet(name).get_all_records()
     except:
         return []
 
-def ler_validados(planilha):
+def get_validated_numbers(sh):
     try:
-        col = planilha.worksheet("leads_validados").col_values(1)
-        return {
-            limpar_numero(v)
-            for v in col
-            if v and limpar_numero(v)
-        }
+        col = sh.worksheet("leads_validados").col_values(1)
+        return {normalize(n) for n in col if normalize(n)}
     except:
         return set()
 
 # ─────────────────────────────────────────────
-# NORMALIZAÇÃO
+# NORMALIZAÇÃO (FIX CRÍTICO)
 # ─────────────────────────────────────────────
 
-def limpar_numero(v):
-    if not v:
+def normalize(n):
+    if not n:
         return None
-    n = re.sub(r"\D", "", str(v))
+
+    n = re.sub(r"\D", "", str(n))
 
     if n.startswith("0055"):
         n = n[4:]
     if n.startswith("55"):
         n = n[2:]
 
-    return "55" + n if len(n) >= 10 else None
+    if len(n) < 10:
+        return None
 
-def gerar_hash(lead):
-    base = f"{lead['numero']}|{lead['nome']}|{lead['endereco']}"
-    return hashlib.md5(base.encode()).hexdigest()
+    return "55" + n
+
+def make_hash(lead):
+    return hashlib.md5(
+        f"{lead['numero']}|{lead['nome']}|{lead['endereco']}".encode()
+    ).hexdigest()
 
 # ─────────────────────────────────────────────
-# RATE LIMIT (anti-block real)
+# RATE LIMIT
 # ─────────────────────────────────────────────
 
-def delay_humano():
-    time.sleep(random.uniform(*DELAY_ENTRE_NUMEROS))
+def human_delay():
+    time.sleep(random.uniform(*NUM_DELAY))
 
-def delay_lote():
-    time.sleep(random.uniform(*BASE_DELAY_LOTE))
+def batch_delay():
+    time.sleep(random.uniform(*BASE_DELAY))
 
 # ─────────────────────────────────────────────
 # EVOLUTION API
 # ─────────────────────────────────────────────
 
-def verificar_whatsapp(numeros):
+def check_whatsapp(numbers):
     if DRY_RUN:
-        return {n: True for n in numeros}
+        return {n: True for n in numbers}
 
     url = f"{EVOLUTION_URL}/chat/whatsappNumbers/{requests.utils.quote(EVOLUTION_INST)}"
-    headers = {"apikey": EVOLUTION_APIKEY, "Content-Type": "application/json"}
-
-    payload = {"numbers": numeros}
+    headers = {"apikey": EVOLUTION_APIKEY}
 
     for i in range(3):
         try:
-            r = requests.post(url, headers=headers, json=payload, timeout=30)
+            r = requests.post(url, json={"numbers": numbers}, headers=headers, timeout=30)
 
             if r.status_code == 429:
-                log.warning("Rate limit detectado, aguardando 60s...")
                 time.sleep(60)
                 continue
 
             if r.ok:
                 data = r.json()
                 return {
-                    re.sub(r"\D", "", item.get("number","")): item.get("exists", False)
-                    for item in data
-                    if isinstance(item, dict)
+                    re.sub(r"\D", "", d.get("number","")): d.get("exists", False)
+                    for d in data if isinstance(d, dict)
                 }
 
         except Exception as e:
-            log.error(f"Erro API: {e}")
+            log.error(f"API error: {e}")
             time.sleep(2 ** i)
 
     return {}
 
 # ─────────────────────────────────────────────
-# PROCESSAMENTO
+# CORE
 # ─────────────────────────────────────────────
 
-def processar():
-    global _shutdown
+def run():
+    sh = connect()
+    state = load_state()
 
-    planilha = conectar()
-    estado = carregar_estado()
+    aba_i = state["aba"]
+    cursor = state["cursor"]
 
-    aba_index = estado["aba_index"]
-    cursor = estado["cursor"]
+    validated = get_validated_numbers(sh)
+    session_seen = set()
 
-    validados = ler_validados(planilha)
-    vistos = set()
+    while aba_i < len(ABAS) and not _shutdown:
 
-    while aba_index < len(ABAS) and not _shutdown:
-        aba_nome = ABAS[aba_index]
-        log.info(f"Processando {aba_nome}")
+        sheet_name = ABAS[aba_i]
+        log.info(f"Aba: {sheet_name}")
 
-        registros = ler_aba(planilha, aba_nome)
+        rows = get_sheet(sh, sheet_name)
 
-        if not registros:
-            aba_index += 1
+        if not rows:
+            aba_i += 1
             cursor = 0
             continue
 
-        while cursor < len(registros) and not _shutdown:
+        while cursor < len(rows) and not _shutdown:
 
-            lote = []
-            hashes = set()
+            batch = []
+            batch_hashes = set()
 
-            while len(lote) < LOTE_SIZE and cursor < len(registros):
-                r = registros[cursor]
+            while len(batch) < LOTE_SIZE and cursor < len(rows):
+                r = rows[cursor]
                 cursor += 1
 
-                numero = limpar_numero(r.get("phoneNumber"))
+                numero = normalize(r.get("phoneNumber") or r.get("phone"))
                 if not numero:
                     continue
 
-                if numero in validados:
+                if numero in validated:
                     continue
 
                 lead = {
                     "numero": numero,
-                    "nome": r.get("title", ""),
-                    "endereco": r.get("address", ""),
-                    "nicho": r.get("type", "geral"),
+                    "nome": r.get("title") or r.get("nome") or "",
+                    "endereco": r.get("address") or "",
+                    "nicho": r.get("type") or "geral"
                 }
 
-                h = gerar_hash(lead)
-                if h in hashes or h in vistos:
+                h = make_hash(lead)
+
+                if h in session_seen or h in batch_hashes:
                     continue
 
-                hashes.add(h)
-                vistos.add(h)
-                lote.append(lead)
+                session_seen.add(h)
+                batch_hashes.add(h)
+                batch.append(lead)
 
-            if not lote:
+            if not batch:
                 continue
 
-            numeros = [l["numero"] for l in lote]
+            numbers = [b["numero"] for b in batch]
 
-            for n in numeros:
-                delay_humano()
+            for n in numbers:
+                human_delay()
 
-            resultado = verificar_whatsapp(numeros)
+            result = check_whatsapp(numbers)
 
-            aprovados = []
-            for l in lote:
-                if resultado.get(re.sub(r"\D", "", l["numero"])):
-                    aprovados.append(l)
-                    validados.add(l["numero"])
+            approved = []
 
-            if aprovados:
-                sheet = planilha.worksheet("leads_validados")
-                sheet.append_rows([[l["numero"], l["nome"], l["nicho"], l["endereco"]] for l in aprovados])
+            for b in batch:
+                if result.get(re.sub(r"\D", "", b["numero"])):
+                    approved.append(b)
+                    validated.add(b["numero"])
 
-            salvar_estado({
-                "aba_index": aba_index,
-                "cursor": cursor,
-                "total": len(validados)
-            })
+            if approved:
+                ws = sh.worksheet("leads_validados")
 
-            delay_lote()
+                ws.append_rows([
+                    [a["numero"], a["nome"], a["nicho"], a["endereco"]]
+                    for a in approved
+                ])
 
-        aba_index += 1
+            save_state({"aba": aba_i, "cursor": cursor})
+
+            batch_delay()
+
+        aba_i += 1
         cursor = 0
 
-    log.info("Finalizado.")
+    log.info("Finalizado com sucesso.")
 
 # ─────────────────────────────────────────────
 # START
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    processar()
+    run()
