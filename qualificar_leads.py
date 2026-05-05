@@ -272,11 +272,7 @@ def normalizar_numero(raw) -> str | None:
         p = p[2:]
     if len(p) < 10 or len(p) > 11:
         return None
-    sufixo = p[2:]
-    if len(p) == 10 and sufixo[0] in ["2", "3", "4", "5"]:
-        return None
-    if len(p) == 11 and sufixo[0] != "9":
-        return None
+    # [v5.1] Filtro de fixo removido — empresas usam WhatsApp Business em VoIP/fixo
     return "55" + p
 
 # ─────────────────────────────────────────────
