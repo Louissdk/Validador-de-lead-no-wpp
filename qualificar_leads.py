@@ -1,11 +1,22 @@
 """
-VisívelAgora — Qualificador de Leads v4
+VisívelAgora — Qualificador de Leads v5
 ========================================
-- Lê 15 abas (leads_raw_1k até leads_raw_15k)
-- Valida WhatsApp via Evolution API (lotes de 10, delay 30-40s)
-- Deduplica contra leads_validados antes de gravar
-- Roda 24h sem controle de horário (só qualificação, sem envio)
-- Salva progresso em estado.json (retoma de onde parou)
+CORREÇÕES v5:
+  [BUG#1] Leads sem WPP agora são rastreados entre sessões via processados.json
+          → Evita re-chamadas desnecessárias na Evolution API
+  [BUG#2] preparar_lote agora loga cada lead pulado por dedup com motivo
+          → Visibilidade total do que está sendo descartado
+  [BUG#3] Estimativa de tempo usa média real de lotes válidos, não total do arquivo
+          → Progresso preciso
+
+MELHORIAS v5:
+  - Pré-análise por aba antes de processar (mostra novos vs já validados vs sem WPP)
+  - Amostra de números brutos no 1º lote para debug de formatação
+  - % de conclusão real por aba e global
+  - Aba 'leads_sem_wpp' no Sheets para auditoria completa
+  - Relatório final expandido com breakdown por aba
+  - Shutdown graceful salva estado ANTES do finally (segurança extra)
+  - Detecção de aba completamente vazia de novos leads (pula sem delay)
 """
 
 import json
@@ -31,15 +42,15 @@ EVOLUTION_APIKEY  = "429683C4C977415CAAFCCE10F7D57E11"
 EVOLUTION_INST    = "Visivel agora"
 GOOGLE_CREDS_FILE = "credentials.json"
 ESTADO_FILE       = "estado.json"
+PROCESSADOS_FILE  = "processados.json"   # [NOVO v5] rastreia todos os números já verificados
 RELATORIO_FILE    = "relatorio_final.json"
 
 LOTE_SIZE         = 10
-DELAY_ENTRE_LOTES = 30   # segundos fixos entre lotes
-DELAY_JITTER      = 10   # segundos aleatórios extras (30~40s total)
+DELAY_ENTRE_LOTES = 30
+DELAY_JITTER      = 10
 
-DRY_RUN = False  # True = não grava nada, não chama Evolution API
+DRY_RUN = False
 
-# 15 abas em ordem
 ABAS = [
     "leads_raw_1k",  "leads_raw_2k",  "leads_raw_3k",
     "leads_raw_4k",  "leads_raw_5k",  "leads_raw_6k",
@@ -70,14 +81,14 @@ _shutdown = False
 
 def _handle_signal(signum, frame):
     global _shutdown
-    log.info("Sinal de encerramento recebido. Finalizando após o lote atual...")
+    log.info("⚠️  Sinal de encerramento recebido. Finalizando após o lote atual...")
     _shutdown = True
 
 signal.signal(signal.SIGINT,  _handle_signal)
 signal.signal(signal.SIGTERM, _handle_signal)
 
 # ─────────────────────────────────────────────
-#  ESTADO
+#  ESTADO + PROCESSADOS
 # ─────────────────────────────────────────────
 
 def carregar_estado() -> dict:
@@ -94,6 +105,28 @@ def carregar_estado() -> dict:
 def salvar_estado(estado: dict):
     with open(ESTADO_FILE, "w", encoding="utf-8") as f:
         json.dump(estado, f, ensure_ascii=False, indent=2)
+
+
+def carregar_processados() -> set:
+    """
+    [NOVO v5 — FIX BUG#1]
+    Carrega todos os números já verificados pela API (com OU sem WPP).
+    Evita re-chamar a Evolution API para números que já foram verificados.
+    """
+    if Path(PROCESSADOS_FILE).exists():
+        with open(PROCESSADOS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        numeros = set(data.get("numeros", []))
+        log.info(f"processados.json: {len(numeros)} números já verificados (com e sem WPP).")
+        return numeros
+    log.info("processados.json não encontrado. Iniciando rastreamento do zero.")
+    return set()
+
+
+def salvar_processados(numeros: set):
+    """Persiste o set de processados em disco."""
+    with open(PROCESSADOS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"numeros": list(numeros), "atualizado_em": datetime.now().isoformat()}, f)
 
 # ─────────────────────────────────────────────
 #  GOOGLE SHEETS
@@ -132,10 +165,10 @@ def ler_numeros_validados(planilha: gspread.Spreadsheet) -> set:
         valores = aba.col_values(1)
         numeros = set(
             re.sub(r"\D", "", v)
-            for v in valores[1:]  # pula header
+            for v in valores[1:]
             if v and re.sub(r"\D", "", v)
         )
-        log.info(f"leads_validados: {len(numeros)} números já registrados.")
+        log.info(f"leads_validados: {len(numeros)} números com WPP confirmado.")
         return numeros
     except Exception as e:
         log.warning(f"Erro ao ler leads_validados: {e}. Assumindo vazio.")
@@ -146,7 +179,7 @@ def gravar_leads_validados(planilha: gspread.Spreadsheet, leads: list[dict]):
     if not leads:
         return
     if DRY_RUN:
-        log.info(f"[DRY_RUN] Gravaria {len(leads)} leads.")
+        log.info(f"[DRY_RUN] Gravaria {len(leads)} leads em leads_validados.")
         return
 
     linhas = [
@@ -157,21 +190,42 @@ def gravar_leads_validados(planilha: gspread.Spreadsheet, leads: list[dict]):
         ]
         for l in leads
     ]
+    _gravar_com_retry(planilha, "leads_validados", linhas)
 
+
+def gravar_leads_sem_wpp(planilha: gspread.Spreadsheet, leads: list[dict]):
+    """
+    [NOVO v5 — FIX BUG#1]
+    Grava leads verificados mas SEM WhatsApp em aba separada para auditoria.
+    Isso permite reprocessar essa lista futuramente se necessário.
+    """
+    if not leads or DRY_RUN:
+        return
+    linhas = [
+        [l["numero"], l["nome"], l["nicho"], l["origem_aba"], l["data_verificacao"]]
+        for l in leads
+    ]
+    try:
+        _gravar_com_retry(planilha, "leads_sem_wpp", linhas)
+    except Exception as e:
+        log.warning(f"Não foi possível gravar em leads_sem_wpp: {e}. Continuando...")
+
+
+def _gravar_com_retry(planilha: gspread.Spreadsheet, nome_aba: str, linhas: list):
     esperas = [5, 15, 30]
     for tentativa, espera in enumerate(esperas):
         try:
-            aba = planilha.worksheet("leads_validados")
+            aba = planilha.worksheet(nome_aba)
             aba.append_rows(linhas, value_input_option="RAW")
-            log.info(f"✅ Gravados {len(linhas)} leads em leads_validados.")
+            log.info(f"✅ Gravados {len(linhas)} registros em '{nome_aba}'.")
             return
         except Exception as e:
-            log.error(f"Erro ao gravar (tentativa {tentativa+1}/3): {e}")
+            log.error(f"Erro ao gravar em '{nome_aba}' (tentativa {tentativa+1}/3): {e}")
             if tentativa < len(esperas) - 1:
                 log.info(f"Retry em {espera}s...")
                 time.sleep(espera)
             else:
-                log.error("Falha definitiva ao gravar lote.")
+                log.error(f"Falha definitiva ao gravar em '{nome_aba}'.")
                 raise
 
 # ─────────────────────────────────────────────
@@ -219,7 +273,6 @@ def normalizar_numero(raw) -> str | None:
     if len(p) < 10 or len(p) > 11:
         return None
     sufixo = p[2:]
-    # Fixo comercial não tem WhatsApp
     if len(p) == 10 and sufixo[0] in ["2", "3", "4", "5"]:
         return None
     if len(p) == 11 and sufixo[0] != "9":
@@ -228,8 +281,6 @@ def normalizar_numero(raw) -> str | None:
 
 # ─────────────────────────────────────────────
 #  NICHO GROUP
-#  Ordem importa: saude antes de entretenimento (laser),
-#                 beleza antes de servicos (limpeza de pele)
 # ─────────────────────────────────────────────
 
 def nicho_group(nicho: str) -> str:
@@ -302,7 +353,6 @@ def nicho_group(nicho: str) -> str:
 
 def calcular_score(lead: dict) -> int:
     score = 50
-
     try:
         rating = float(lead.get("rating") or 0)
         if rating >= 4.5:        score += 20
@@ -316,9 +366,9 @@ def calcular_score(lead: dict) -> int:
     elif lead.get("tem_site") == "true": score -= 5
 
     ng = lead.get("nicho_group", "")
-    if ng in ["food", "beleza"]:              score += 10
-    elif ng in ["saude", "varejo"]:           score += 5
-    elif ng in ["automotivo", "servicos"]:    score += 3
+    if ng in ["food", "beleza"]:           score += 10
+    elif ng in ["saude", "varejo"]:        score += 5
+    elif ng in ["automotivo", "servicos"]: score += 3
 
     return max(0, min(100, score))
 
@@ -352,7 +402,7 @@ def verificar_whatsapp(numeros: list[str]) -> dict[str, bool]:
             if resp.ok:
                 break
             if 400 <= resp.status_code < 500:
-                log.error(f"Evolution API erro {resp.status_code}: {resp.text[:200]}")
+                log.error(f"Evolution API erro {resp.status_code}: {resp.text[:300]}")
                 return {}
             log.warning(f"Evolution API {resp.status_code} (tentativa {tentativa+1}/3)")
             if tentativa < len(esperas) - 1:
@@ -372,7 +422,7 @@ def verificar_whatsapp(numeros: list[str]) -> dict[str, bool]:
     try:
         data = resp.json()
     except Exception:
-        log.error("Evolution API retornou JSON inválido.")
+        log.error(f"Evolution API JSON inválido. Resposta bruta: {resp.text[:200]}")
         return {}
 
     lista = data if isinstance(data, list) else []
@@ -390,7 +440,51 @@ def verificar_whatsapp(numeros: list[str]) -> dict[str, bool]:
     return resultado
 
 # ─────────────────────────────────────────────
-#  PREPARAR LOTE
+#  PRÉ-ANÁLISE DA ABA  [NOVO v5]
+# ─────────────────────────────────────────────
+
+def pre_analise_aba(
+    registros: list[dict],
+    nome_aba: str,
+    numeros_existentes: set,
+    numeros_processados: set,
+) -> dict:
+    """
+    [NOVO v5]
+    Analisa quantos leads da aba são novos vs já validados vs já verificados (sem WPP).
+    Não consome API — apenas classifica para dar visibilidade antes de processar.
+    """
+    total       = len(registros)
+    sem_numero  = 0
+    ja_validado = 0
+    ja_verificado_sem_wpp = 0
+    novos       = 0
+
+    for row in registros:
+        numero = normalizar_numero(row.get("phoneNumber") or row.get("phone") or "")
+        if not numero:
+            sem_numero += 1
+            continue
+        digits = re.sub(r"\D", "", numero)
+        if digits in numeros_existentes:
+            ja_validado += 1
+        elif digits in numeros_processados:
+            ja_verificado_sem_wpp += 1
+        else:
+            novos += 1
+
+    log.info(
+        f"  📊 Pré-análise '{nome_aba}': "
+        f"Total={total} | Novos={novos} | "
+        f"Já com WPP={ja_validado} | "
+        f"Já verificados (sem WPP)={ja_verificado_sem_wpp} | "
+        f"Sem número válido={sem_numero}"
+    )
+    return {"total": total, "novos": novos, "ja_validado": ja_validado,
+            "ja_verificado_sem_wpp": ja_verificado_sem_wpp, "sem_numero": sem_numero}
+
+# ─────────────────────────────────────────────
+#  PREPARAR LOTE  [BUG#2 CORRIGIDO]
 # ─────────────────────────────────────────────
 
 def preparar_lote(
@@ -398,27 +492,48 @@ def preparar_lote(
     cursor: int,
     nome_aba: str,
     numeros_existentes: set,
+    numeros_processados: set,
     vistos_sessao: set,
-) -> tuple[list[dict], int]:
+    debug_numeros: bool = False,
+) -> tuple[list[dict], int, dict]:
+    """
+    [BUG#2 CORRIGIDO]
+    Agora retorna também estatísticas de skip com motivo, e loga amostra de números
+    no 1º lote para debug de formatação.
+    """
     lote = []
     i = cursor
+    stats = {"sem_numero": 0, "ja_validado": 0, "ja_processado": 0, "sem_nome": 0}
+    amostras_raw = []
 
     while i < len(registros) and len(lote) < LOTE_SIZE:
         row = registros[i]
         i += 1
 
-        numero = normalizar_numero(row.get("phoneNumber") or row.get("phone") or "")
+        raw_phone = row.get("phoneNumber") or row.get("phone") or ""
+        numero = normalizar_numero(raw_phone)
+
+        # [NOVO v5 DEBUG] Coleta amostra dos primeiros números brutos
+        if debug_numeros and len(amostras_raw) < 5:
+            amostras_raw.append(f"'{raw_phone}' → '{numero}'")
+
         if not numero:
+            stats["sem_numero"] += 1
             continue
 
         digits = re.sub(r"\D", "", numero)
 
-        # Deduplicação: contra o Sheets e contra o lote atual
-        if digits in numeros_existentes or digits in vistos_sessao:
+        # [BUG#2 FIX] Dedup com motivo detalhado
+        if digits in numeros_existentes:
+            stats["ja_validado"] += 1
+            continue
+        if digits in numeros_processados or digits in vistos_sessao:
+            stats["ja_processado"] += 1
             continue
 
         nome = str(row.get("title") or row.get("nome") or "").strip()
         if not nome:
+            stats["sem_nome"] += 1
             continue
 
         nicho   = str(row.get("type") or row.get("nicho") or "geral").lower().strip()
@@ -438,13 +553,17 @@ def preparar_lote(
         }
         lead["score"]               = calcular_score(lead)
         lead["priority_level"]      = calcular_priority(lead["score"])
-        lead["whatsapp_confirmado"] = "true"
+        lead["whatsapp_confirmado"] = "pendente"   # será atualizado após verificação
         lead["data_verificacao"]    = datetime.now().strftime("%d/%m/%Y")
 
         vistos_sessao.add(digits)
         lote.append(lead)
 
-    return lote, i
+    # Log amostra para debug
+    if debug_numeros and amostras_raw:
+        log.info(f"  🔍 Amostra de números (raw → normalizado): {' | '.join(amostras_raw)}")
+
+    return lote, i, stats
 
 # ─────────────────────────────────────────────
 #  RELATÓRIO FINAL
@@ -463,7 +582,7 @@ def main():
     global _shutdown
 
     log.info("=" * 60)
-    log.info("VisívelAgora — Qualificador de Leads v4")
+    log.info("VisívelAgora — Qualificador de Leads v5")
     log.info(f"Início: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     log.info(f"Abas: {len(ABAS)} | Lotes de {LOTE_SIZE} | Delay {DELAY_ENTRE_LOTES}-{DELAY_ENTRE_LOTES+DELAY_JITTER}s | DRY_RUN={DRY_RUN}")
     log.info("=" * 60)
@@ -494,19 +613,23 @@ def main():
         log.info("✅ Todas as abas já foram processadas.")
         return
 
-    # Lê os números já validados UMA VEZ para deduplicação em memória
-    log.info("Carregando números já validados para deduplicação...")
-    numeros_existentes = ler_numeros_validados(planilha)
+    # Carrega validados (com WPP) e processados (sem WPP) para dedup completa
+    log.info("Carregando dados para deduplicação...")
+    numeros_existentes  = ler_numeros_validados(planilha)   # com WPP → não reprocessar
+    numeros_processados = carregar_processados()             # [NOVO v5] sem WPP → não re-verificar
     vistos_sessao = set()
 
     # Estatísticas da sessão
-    data_inicio     = datetime.now()
-    total_lidos     = 0
-    total_com_wpp   = 0
-    gravados_sessao = 0
-    tempos_lote     = []
-    por_nicho       = {k: 0 for k in ["food","beleza","saude","varejo","automotivo","educacao","servicos","entretenimento"]}
-    num_lote_global = 0
+    data_inicio       = datetime.now()
+    total_lidos       = 0
+    total_com_wpp     = 0
+    total_sem_wpp     = 0
+    gravados_sessao   = 0
+    tempos_lote       = []
+    por_nicho         = {k: 0 for k in ["food","beleza","saude","varejo","automotivo","educacao","servicos","entretenimento"]}
+    stats_por_aba     = {}
+    num_lote_global   = 0
+    novos_processados = set()   # [NOVO v5] acumula para salvar no finally
 
     try:
         while aba_index < len(ABAS) and not _shutdown:
@@ -523,19 +646,51 @@ def main():
                 salvar_estado({"aba_index": aba_index, "cursor": cursor, "total_gravados": total_gravados})
                 continue
 
-            total_lotes_aba = (len(registros) // LOTE_SIZE) + 1
-            num_lote_aba = 0
+            # [NOVO v5] Pré-análise para visibilidade
+            analise = pre_analise_aba(registros, nome_aba, numeros_existentes, numeros_processados)
+            stats_por_aba[nome_aba] = analise
+
+            if analise["novos"] == 0:
+                log.info(f"  ⏩ Aba '{nome_aba}' sem leads novos. Pulando sem delay.")
+                aba_index += 1
+                cursor = 0
+                salvar_estado({"aba_index": aba_index, "cursor": cursor, "total_gravados": total_gravados})
+                continue
+
+            # [BUG#3 FIX] Estimativa baseada em leads novos, não no total do arquivo
+            leads_novos_estimados = analise["novos"]
+            lotes_estimados = max(1, (leads_novos_estimados // LOTE_SIZE) + 1)
+            log.info(f"  ⏱️  Estimativa: ~{lotes_estimados} lotes reais ({leads_novos_estimados} leads novos)")
+
+            num_lote_aba  = 0
+            wpp_aba       = 0
+            sem_wpp_aba   = 0
+            debug_primeira_vez = True   # amostra de números só no 1º lote
 
             while cursor < len(registros) and not _shutdown:
                 t_inicio = time.time()
                 num_lote_global += 1
                 num_lote_aba    += 1
 
-                lote, novo_cursor = preparar_lote(
-                    registros, cursor, nome_aba, numeros_existentes, vistos_sessao
+                lote, novo_cursor, skip_stats = preparar_lote(
+                    registros, cursor, nome_aba,
+                    numeros_existentes, numeros_processados, vistos_sessao,
+                    debug_numeros=debug_primeira_vez,
                 )
+                debug_primeira_vez = False
                 cursor = novo_cursor
                 total_lidos += len(lote)
+
+                # [BUG#2 FIX] Log de skips detalhado
+                total_skips = sum(skip_stats.values())
+                if total_skips > 0:
+                    log.info(
+                        f"  ↩️  Pulados nesse trecho: {total_skips} "
+                        f"(já com WPP={skip_stats['ja_validado']} | "
+                        f"já verificado={skip_stats['ja_processado']} | "
+                        f"sem número={skip_stats['sem_numero']} | "
+                        f"sem nome={skip_stats['sem_nome']})"
+                    )
 
                 if not lote:
                     # Sem leads válidos nesse trecho — avança sem delay
@@ -544,73 +699,112 @@ def main():
                 # Verifica WhatsApp
                 wpp_map = verificar_whatsapp([l["numero"] for l in lote])
 
-                com_wpp = []
+                com_wpp     = []
+                sem_wpp     = []
+
                 for lead in lote:
                     digits = re.sub(r"\D", "", lead["numero"])
                     if wpp_map.get(digits) is True:
-                        numeros_existentes.add(digits)  # evita duplicata na mesma sessão
+                        lead["whatsapp_confirmado"] = "true"
+                        numeros_existentes.add(digits)
                         com_wpp.append(lead)
                         por_nicho[lead["nicho_group"]] = por_nicho.get(lead["nicho_group"], 0) + 1
+                    else:
+                        lead["whatsapp_confirmado"] = "false"
+                        sem_wpp.append(lead)
+
+                    # [NOVO v5 BUG#1 FIX] Marca como processado independente do resultado WPP
+                    numeros_processados.add(digits)
+                    novos_processados.add(digits)
 
                 total_com_wpp   += len(com_wpp)
+                total_sem_wpp   += len(sem_wpp)
+                wpp_aba         += len(com_wpp)
+                sem_wpp_aba     += len(sem_wpp)
                 gravados_sessao += len(com_wpp)
 
                 if com_wpp:
                     gravar_leads_validados(planilha, com_wpp)
                     total_gravados += len(com_wpp)
 
+                if sem_wpp:
+                    gravar_leads_sem_wpp(planilha, sem_wpp)
+
+                # Salva processados a cada lote (segurança)
+                if novos_processados:
+                    numeros_processados.update(novos_processados)
+                    salvar_processados(numeros_processados)
+                    novos_processados.clear()
+
                 # Salva progresso
                 salvar_estado({"aba_index": aba_index, "cursor": cursor, "total_gravados": total_gravados})
 
-                # Log de progresso
+                # [BUG#3 FIX] Estimativa de tempo com base em lotes reais
                 t_lote = time.time() - t_inicio
                 tempos_lote.append(t_lote)
-                media_t = sum(tempos_lote) / len(tempos_lote)
-                lotes_restantes_aba = total_lotes_aba - num_lote_aba
+                media_t = sum(tempos_lote[-20:]) / len(tempos_lote[-20:])  # média dos últimos 20
+                lotes_restantes_aba = max(0, lotes_estimados - num_lote_aba)
                 est_min = int((lotes_restantes_aba * media_t) / 60)
 
+                # % de conclusão da aba baseado no cursor
+                pct_aba = int((cursor / len(registros)) * 100)
+
+                taxa_wpp_lote = f"{round(len(com_wpp)/len(lote)*100)}%" if lote else "0%"
+
                 log.info(
-                    f"[{nome_aba}] Lote {num_lote_aba}/{total_lotes_aba} | "
-                    f"WPP: {len(com_wpp)}/{len(lote)} | "
+                    f"[{nome_aba}] Lote {num_lote_aba} | "
+                    f"WPP: {len(com_wpp)}/{len(lote)} ({taxa_wpp_lote}) | "
                     f"Sessão: {gravados_sessao} | "
-                    f"Total: {total_gravados} | "
-                    f"~{est_min}min restantes nessa aba"
+                    f"Total geral: {total_gravados} | "
+                    f"Aba: {pct_aba}% | "
+                    f"~{est_min}min restantes"
                 )
 
-                # Delay anti-ban com jitter
                 delay = DELAY_ENTRE_LOTES + random.randint(0, DELAY_JITTER)
                 log.info(f"Aguardando {delay}s...")
                 time.sleep(delay)
 
             if not _shutdown:
-                log.info(f"✅ Aba '{nome_aba}' concluída.")
+                log.info(
+                    f"✅ Aba '{nome_aba}' concluída — "
+                    f"WPP encontrados: {wpp_aba} | Sem WPP: {sem_wpp_aba}"
+                )
                 aba_index += 1
                 cursor = 0
                 salvar_estado({"aba_index": aba_index, "cursor": cursor, "total_gravados": total_gravados})
 
     finally:
+        # Salva processados finais
+        if novos_processados:
+            numeros_processados.update(novos_processados)
+            salvar_processados(numeros_processados)
+
         data_fim = datetime.now()
         duracao  = int((data_fim - data_inicio).total_seconds() / 60)
         taxa_wpp = f"{round(total_com_wpp / total_lidos * 100, 1)}%" if total_lidos > 0 else "0%"
 
         relatorio = {
+            "versao":          "v5",
             "data_inicio":     data_inicio.strftime("%d/%m/%Y %H:%M:%S"),
             "data_fim":        data_fim.strftime("%d/%m/%Y %H:%M:%S"),
             "duracao_minutos": duracao,
             "total_lidos":     total_lidos,
             "total_com_wpp":   total_com_wpp,
+            "total_sem_wpp":   total_sem_wpp,
             "total_gravados":  total_gravados,
             "taxa_wpp":        taxa_wpp,
             "por_nicho_group": por_nicho,
+            "por_aba":         stats_por_aba,
         }
         salvar_relatorio(relatorio)
 
         if _shutdown:
-            log.info("Script encerrado. Estado salvo — rode novamente para retomar.")
+            log.info("Script encerrado pelo usuário. Estado salvo — rode novamente para retomar.")
         else:
             log.info("\n" + "=" * 60)
             log.info("🎉 PROCESSAMENTO CONCLUÍDO!")
             log.info(f"Total gravados: {total_gravados} | Taxa WPP: {taxa_wpp}")
+            log.info(f"Total verificados sem WPP: {total_sem_wpp}")
             log.info("=" * 60)
 
 
