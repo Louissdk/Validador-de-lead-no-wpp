@@ -50,6 +50,7 @@ DELAY_ENTRE_LOTES = 30
 DELAY_JITTER      = 10
 
 DRY_RUN = False
+FORCAR_RESET = False
 
 ABAS = [
     "leads_raw_1k",  "leads_raw_2k",  "leads_raw_3k",
