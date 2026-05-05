@@ -576,58 +576,39 @@ def salvar_relatorio(stats: dict):
 
 
 def menu_inicial():
-    """Pergunta ao usuário o que fazer antes de iniciar."""
+    """
+    Gerencia estado antes de iniciar.
+    Para resetar: mude FORCAR_RESET = True no topo do arquivo,
+    suba para o GitHub, deixe o EasyPanel redeploy, depois volte para False.
+    """
     tem_estado      = Path(ESTADO_FILE).exists()
     tem_processados = Path(PROCESSADOS_FILE).exists()
 
-    print("\n" + "=" * 55)
-    print("  VisívelAgora — Qualificador de Leads v5")
-    print("=" * 55)
-
-    if not tem_estado and not tem_processados:
-        print("\n  ✅ Nenhum progresso salvo. Iniciando do zero.\n")
+    if FORCAR_RESET:
+        log.info("⚠️  FORCAR_RESET=True — apagando estado e processados...")
+        if tem_estado:
+            Path(ESTADO_FILE).unlink()
+            log.info("🗑️  estado.json apagado.")
+        if tem_processados:
+            Path(PROCESSADOS_FILE).unlink()
+            log.info("🗑️  processados.json apagado.")
+        log.info("✅ Reset concluído. Lembre de voltar FORCAR_RESET=False no código!")
         return
 
-    print("\n  Arquivos de progresso encontrados:")
+    if not tem_estado and not tem_processados:
+        log.info("Nenhum progresso salvo. Iniciando do zero.")
+        return
+
     if tem_estado:
         with open(ESTADO_FILE) as f:
             e = json.load(f)
         aba_atual = ABAS[min(e.get("aba_index", 0), len(ABAS)-1)]
-        print(f"    📄 estado.json      → aba: {aba_atual} | gravados: {e.get('total_gravados', 0)}")
+        log.info(f"Progresso encontrado → aba: {aba_atual} | gravados: {e.get('total_gravados', 0)}")
     if tem_processados:
         with open(PROCESSADOS_FILE) as f:
             p = json.load(f)
-        print(f"    📄 processados.json → {len(p.get('numeros', []))} números já verificados")
-
-    print("\n  O que deseja fazer?")
-    print("  [1] Continuar de onde parou  (recomendado)")
-    print("  [2] Recomeçar do zero        (apaga progresso salvo)")
-    print("  [3] Cancelar")
-    print()
-
-    while True:
-        escolha = input("  Digite 1, 2 ou 3: ").strip()
-        if escolha == "1":
-            print("\n  ▶️  Continuando...\n")
-            return
-        elif escolha == "2":
-            conf = input("\n  ⚠️  Tem certeza? (s/n): ").strip().lower()
-            if conf == "s":
-                if tem_estado:
-                    Path(ESTADO_FILE).unlink()
-                    print("  🗑️  estado.json apagado.")
-                if tem_processados:
-                    Path(PROCESSADOS_FILE).unlink()
-                    print("  🗑️  processados.json apagado.")
-                print("\n  ✅ Recomeçando do zero...\n")
-                return
-            else:
-                print("  Cancelado.")
-        elif escolha == "3":
-            print("\n  Encerrando.\n")
-            exit(0)
-        else:
-            print("  Digite apenas 1, 2 ou 3.")
+        log.info(f"Processados encontrados → {len(p.get('numeros', []))} números já verificados")
+    log.info("Continuando de onde parou. (Para resetar: FORCAR_RESET=True no topo do arquivo)")
 
 def main():
     global _shutdown
