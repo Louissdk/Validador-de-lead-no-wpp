@@ -63,9 +63,9 @@ PROCESSADOS_FILE = DATA_DIR / "processados.json"
 RELATORIO_FILE  = DATA_DIR / "relatorio_final.json"
 LOG_FILE        = Path("/app/qualificar_leads.log")
 
-LOTE_SIZE          = 3
-DELAY_MIN          = 180  # 3 minutos entre lotes
-DELAY_MAX          = 300  # até 5 minutos entre lotes
+LOTE_SIZE          = 5
+DELAY_MIN          = 60   # 1 minuto entre lotes
+DELAY_MAX          = 90   # até 1.5 minutos entre lotes
 DELAY_API_FALHOU   = 300  # 5 minutos quando API cai
 
 DRY_RUN      = False
