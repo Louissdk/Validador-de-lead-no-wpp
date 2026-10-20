@@ -1,19 +1,16 @@
 # Arquitetura do MVP
 
-- CLI: inicializa banco, importa CSV, cria/ativa campanhas, visualiza fila e prepara rascunho assistido de um único contato.
-- PostgreSQL: fonte de verdade para leads, consentimento, campanhas, fila, supressões e eventos.
-- Worker: reivindica tarefas com FOR UPDATE SKIP LOCKED, valida consentimento/resposta/supressão, horário comercial, teto diário e rate limit Redis.
-- Evolution API: adaptador opcional de envio; simulação não chama serviço externo.
-- Navegador assistido: Playwright abre Chromium visível em perfil dedicado, valida opt-in no banco, abre um chat e preenche o campo. Nunca aciona o botão ou tecla de envio.
-- FastAPI: health check e webhook protegido; registra respostas e opt-outs quando a integração Evolution está configurada.
+- CLI: inicialização do banco, importação CSV e modo individual assistido pelo navegador.
+- PostgreSQL: leads, consentimento, campanhas, fila, supressões, eventos e fila de revisão de rascunhos.
+- Central local em /drafts: prepara mensagens com um modelo, filtra por nicho/cidade, pagina resultados, edita, aprova/rejeita e exporta rascunhos aprovados para CSV.
+- A aprovação da Central nunca envia mensagens. Ela só habilita um link para abrir o WhatsApp Web com texto pré-preenchido para revisão e envio manual.
+- Worker: integra opcionalmente com Evolution API; dry_run é o padrão.
+- FastAPI: Central de revisão local, health check e webhook de mensagens da Evolution API.
 
-Decisões:
-1. Todas as campanhas nascem pausadas.
-2. Telefone válido não significa consentimento.
-3. O envio assistido é individual e exige revisão humana.
-4. Resposta recebida cancela a cadência pendente.
-5. Pedido de opt-out cria supressão durável.
-6. dry_run é o modo padrão do worker.
-7. Envio real via API exige confirmação de ambiente explícita.
-
-Fluxo: importar e auditar a base; validar consentimento; preparar rascunho; revisar manualmente; só então enviar manualmente.
+Segurança:
+1. Leads sem opt-in documentado não podem receber rascunho elegível.
+2. Respostas registradas e contatos na supressão são excluídos.
+3. Mensagens com campos personalizados vazios não são geradas.
+4. A aprovação é revalidada no backend.
+5. A Central deve permanecer local; não expor à internet sem autenticação e proteção de formulários.
+6. Nenhum dado pessoal real, credencial ou perfil do navegador deve ir para o GitHub.

@@ -60,6 +60,28 @@ CREATE TABLE IF NOT EXISTS message_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_message_events_created ON message_events(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS draft_batches (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    message_template TEXT NOT NULL,
+    niche_filter TEXT NOT NULL DEFAULT '',
+    city_filter TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS draft_reviews (
+    id BIGSERIAL PRIMARY KEY,
+    batch_id BIGINT NOT NULL REFERENCES draft_batches(id) ON DELETE CASCADE,
+    lead_id BIGINT NOT NULL REFERENCES leads(id),
+    message_text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+    review_note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reviewed_at TIMESTAMPTZ,
+    UNIQUE (batch_id, lead_id)
+);
+CREATE INDEX IF NOT EXISTS idx_draft_reviews_batch_status ON draft_reviews(batch_id, status, id);
 """
 
 

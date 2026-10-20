@@ -2,21 +2,19 @@
 
 ## MVP incluído
 - [x] Importação CSV e normalização de telefones
-- [x] Consentimento explícito e supressão
+- [x] Consentimento explícito, supressão e interrupção de cadência no webhook
 - [x] PostgreSQL com fila persistente
-- [x] Mensagem inicial e follow-ups escalonados via worker
-- [x] Worker com dry-run por padrão
-- [x] Adaptador opcional para Evolution API
-- [x] Webhook para resposta e opt-out
-- [x] Limite diário, horário comercial e rate limit distribuído
+- [x] Motor opcional para Evolution API, dry-run por padrão
 - [x] Modo navegador assistido de contato único, sem envio automático
-- [x] Docker Compose e testes unitários
+- [x] Central local de rascunhos em lote com filtros, paginação, edição, aprovação, rejeição e exportação CSV
+- [x] Testes unitários e GitHub Actions
 
 ## Próximas iterações
-- [ ] Painel web para leads, campanhas, aprovação e métricas
+- [ ] Execução integrada com PostgreSQL e navegador no Windows
 - [ ] Integração incremental com Google Sheets
-- [ ] Score 0–100 com critérios explicáveis e aprovação humana
-- [ ] Dashboard de entregas, respostas, descadastros, falhas e conversão
-- [ ] Testes de integração com payloads reais sem disparos externos
-- [ ] Migrações de banco, backups testados e observabilidade
-- [ ] Aprovação de mensagens e histórico de versões dos templates
+- [ ] Score comercial 0–100 com critérios explicáveis
+- [ ] Classificação semântica de respostas e encaminhamento ao vendedor
+- [ ] Dashboard de entrega, resposta, descadastro, falhas e conversão
+- [ ] Registro assistido de envio manual e conciliação de status
+- [ ] Autenticação local antes de qualquer exposição em rede
+- [ ] Migrações de banco versionadas e backups testados
