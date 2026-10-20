@@ -151,6 +151,11 @@ def main() -> None:
     serve = sub.add_parser("serve", help="Executar API de health check e webhook")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
+    sheetplan = sub.add_parser("plan-sheet", help="Planejar qualificação/oferta/mensagem na planilha Google (sem gravar por padrão)")
+    sheetplan.add_argument("--source-tab", default=None, help="Aba de origem; padrão GOOGLE_SOURCE_TAB")
+    sheetplan.add_argument("--output-tab", default=None, help="Aba de saída; padrão GOOGLE_OUTPUT_TAB")
+    sheetplan.add_argument("--limit", type=int, default=0, help="Máximo de registros; 0 processa todos")
+    sheetplan.add_argument("--write", action="store_true", help="Gravar/atualizar a aba de saída; sem isso apenas mostra prévia")
     args = parser.parse_args()
     try:
         if args.command == "init-db":
@@ -163,6 +168,9 @@ def main() -> None:
         elif args.command == "browser-draft":
             from .browser_assist import prepare_manual_draft
             prepare_manual_draft(args.phone, args.message)
+        elif args.command == "plan-sheet":
+            from .sheets_planner import run_plan_sheet
+            run_plan_sheet(write=args.write, source_tab=args.source_tab, output_tab=args.output_tab, limit=args.limit)
         elif args.command == "worker": run_worker(args.once)
         elif args.command == "serve":
             import uvicorn

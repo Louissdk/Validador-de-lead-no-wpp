@@ -14,3 +14,10 @@ Segurança:
 4. A aprovação é revalidada no backend.
 5. A Central deve permanecer local; não expor à internet sem autenticação e proteção de formulários.
 6. Nenhum dado pessoal real, credencial ou perfil do navegador deve ir para o GitHub.
+
+
+## Planejamento via Google Sheets
+
+O comando plan-sheet lê a aba configurada (por padrão leads_validados) e cria/atualiza uma aba separada (por padrão kael_planejamento). Organiza categoria de nicho, score/prioridade, hipótese de produto, justificativa, parágrafos e mensagem completa. A mensagem de WhatsApp permanece vazia sem opt-in documentado. A regra de score é heurística e a oferta é preliminar, não resultado de auditoria real.
+
+A gravação exige a flag --write. A aba de origem não é alterada. Credenciais Google são locais e devem ficar fora do repositório.

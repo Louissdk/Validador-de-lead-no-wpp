@@ -37,3 +37,18 @@ Quando disponível, configure EVOLUTION_BASE_URL, EVOLUTION_API_KEY e EVOLUTION_
 Colunas: nome, empresa, telefone, nicho, cidade, consent_status, consent_source, consent_at. Valores aceitos para consentimento: opt_in, opt_out, unknown. Um telefone válido não prova consentimento.
 
 Testes unitários: pytest -q dentro de visivel-kael-python.
+
+
+## Planejamento de leads direto no Google Sheets
+
+O comando plan-sheet gera uma prévia de qualificação, tipo de lead, score/prioridade, oferta sugerida, justificativa e mensagens separadas em parágrafos, sem abrir o WhatsApp. Por padrão ele não grava nada.
+
+1. Configure GOOGLE_SHEETS_ID no arquivo .env.
+2. Coloque a chave JSON da Service Account localmente em credentials.json, ou configure GOOGLE_CREDS_FILE. Compartilhe a planilha com o e-mail da Service Account. Nunca versione o JSON.
+3. Instale as dependências atualizadas com python -m pip install -r requirements.txt.
+4. Teste com python -m app plan-sheet --limit 20.
+5. Quando revisar a prévia, grave a aba separada com python -m app plan-sheet --limit 20 --write. Para todos os registros, retire --limit 20.
+
+A aba de origem (por padrão leads_validados) fica preservada. A saída (por padrão kael_planejamento) tem uma coluna para cada parágrafo e uma coluna mensagem_completa_copiar_colar. Textos para WhatsApp só são preparados quando a fonte contém opt-in documentado (consent_status, consent_source e consent_at). Os demais leads recebem status AGUARDAR_AUTORIZACAO e continuam com os campos de mensagem vazios.
+
+Consulte docs/PLANEJAMENTO_GOOGLE_SHEETS.md para o procedimento completo e as limitações.

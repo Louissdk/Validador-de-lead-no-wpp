@@ -13,3 +13,6 @@ Este documento é operacional, não uma opinião jurídica. Antes do envio real,
 - Nunca suba dados pessoais reais, credenciais ou o perfil do navegador para o GitHub.
 - Configure webhooks com HTTPS e segredo aleatório longo; não exponha PostgreSQL ou Redis à internet.
 - Se o formato do webhook não corresponder à versão instalada da Evolution API, interrompa e valide o payload em homologação.
+
+- O planejador de planilha deixa a mensagem de WhatsApp vazia quando não há opt-in documentado.
+- A origem de um número público não é evidência de consentimento para receber mensagens pelo WhatsApp.

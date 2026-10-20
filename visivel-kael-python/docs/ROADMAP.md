@@ -9,6 +9,12 @@
 - [x] Central local de rascunhos em lote com filtros, paginação, edição, aprovação, rejeição e exportação CSV
 - [x] Testes unitários e GitHub Actions
 
+## Incluído nesta atualização
+- [x] Planejamento de leads e produtos numa nova aba Google Sheets
+- [x] Mensagem em parágrafos separados e campo consolidado para copiar e colar
+- [x] Prévia sem gravação por padrão e gravação explícita com --write
+- [x] Bloqueio de texto para WhatsApp sem opt-in documentado
+
 ## Próximas iterações
 - [ ] Execução integrada com PostgreSQL e navegador no Windows
 - [ ] Integração incremental com Google Sheets

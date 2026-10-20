@@ -18,6 +18,10 @@ def _bool(name: str, default: bool = False) -> bool:
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", "postgresql://kael:change_me_local_password@localhost:5433/kael")
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    google_sheets_id: str = os.getenv("GOOGLE_SHEETS_ID", "").strip()
+    google_creds_file: str = os.getenv("GOOGLE_CREDS_FILE", "credentials.json").strip()
+    google_source_tab: str = os.getenv("GOOGLE_SOURCE_TAB", "leads_validados").strip()
+    google_output_tab: str = os.getenv("GOOGLE_OUTPUT_TAB", "kael_planejamento").strip()
     evolution_base_url: str = os.getenv("EVOLUTION_BASE_URL", "").rstrip("/")
     evolution_api_key: str = os.getenv("EVOLUTION_API_KEY", "")
     evolution_instance: str = os.getenv("EVOLUTION_INSTANCE", "")

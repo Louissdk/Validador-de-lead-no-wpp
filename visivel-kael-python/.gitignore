@@ -11,3 +11,6 @@ data/whatsapp-profile/
 logs/
 *.log
 .DS_Store
+credentials.json
+service-account*.json
+*service-account*.json
