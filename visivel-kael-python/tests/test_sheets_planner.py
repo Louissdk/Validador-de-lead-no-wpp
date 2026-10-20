@@ -74,3 +74,43 @@ def test_niche_categories_are_normalized():
 def test_output_contains_copy_paste_and_breakdown_columns():
     assert "mensagem_completa_copiar_colar" in OUTPUT_HEADERS
     assert "paragrafo_2_contexto" in OUTPUT_HEADERS
+
+
+def test_existing_output_opt_out_is_sticky_on_rerun():
+    from app.sheets_planner import _rows_preserving_review
+
+    fresh = plan_lead(base_lead(
+        consent_status="opt_in",
+        consent_source="formulario",
+        consent_at="2026-10-15",
+    ))
+    old = [{
+        "telefone": fresh["telefone"],
+        "status_autorizacao_whatsapp": "opt_out",
+        "status_revisao": "BLOQUEADO_DESCADASTRO",
+        "mensagem_completa_copiar_colar": "texto antigo que nao deve voltar",
+    }]
+    merged = _rows_preserving_review(old, [fresh])
+    assert merged[0]["status_autorizacao_whatsapp"] == "opt_out"
+    assert merged[0]["status_revisao"] == "BLOQUEADO_DESCADASTRO"
+    assert merged[0]["mensagem_completa_copiar_colar"] == ""
+
+
+def test_existing_manual_message_is_preserved_when_still_eligible():
+    from app.sheets_planner import _rows_preserving_review
+
+    fresh = plan_lead(base_lead(
+        consent_status="opt_in",
+        consent_source="formulario",
+        consent_at="2026-10-15",
+    ))
+    old = [{
+        "telefone": fresh["telefone"],
+        "status_autorizacao_whatsapp": "opt_in",
+        "status_revisao": "APROVADO_MANUALMENTE",
+        "mensagem_completa_copiar_colar": "texto editado pelo Luis",
+        "nota_revisor": "revisado",
+    }]
+    merged = _rows_preserving_review(old, [fresh])
+    assert merged[0]["mensagem_completa_copiar_colar"] == "texto editado pelo Luis"
+    assert merged[0]["status_revisao"] == "APROVADO_MANUALMENTE"

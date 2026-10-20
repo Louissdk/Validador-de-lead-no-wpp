@@ -203,7 +203,7 @@ def plan_lead(source: dict[str, Any], analyzed_at: str | None = None) -> dict[st
         _first(source, "consent_source", "origem_opt_in", default=""),
         _first(source, "consent_at", "data_opt_in", default=""),
     )
-    contact_status = str(_first(source, "status_contato", "status_whatsapp", "status_revisao", default="")).strip().lower()
+    contact_status = str(_first(source, "status_contato", "status_whatsapp", "status_revisao", "status_autorizacao_whatsapp", default="")).strip().lower()
     replied_value = str(_first(source, "replied_at", "respondeu", "resposta_recebida", default="")).strip().lower()
     replied = replied_value not in {"", "false", "nao", "não", "no", "0", "none"}
     suppressed = consent == "opt_out" or any(term in contact_status for term in ("opt_out", "descadastro", "nao_contatar", "não contatar", "bloqueado"))
@@ -329,17 +329,32 @@ def _rows_preserving_review(existing_rows: list[dict[str, str]], planned_rows: l
         old = old_by_phone.get(phone)
         if old:
             old_norm = _row_map(old)
+            old_status = str(old_norm.get(_norm_header("status_revisao"), "")).strip().upper()
+            old_consent = str(old_norm.get(_norm_header("status_autorizacao_whatsapp"), "")).strip().lower()
+            old_suppressed = old_consent == "opt_out" or any(term in old_status.lower() for term in ("descadastro", "nao_contatar", "não contatar"))
+            old_replied = "BLOQUEADO_JA_RESPONDEU" in old_status
+            # Keep the strongest previously recorded restriction even if a later import
+            # brings a stale source row back as active/opt-in.
+            if old_suppressed:
+                item["status_autorizacao_whatsapp"] = "opt_out"
+                item["status_revisao"] = "BLOQUEADO_DESCADASTRO"
+                item["proxima_acao"] = "Não contatar. Manter bloqueio."
+                item["_consent_ok"] = False
+            elif old_replied:
+                item["status_revisao"] = "BLOQUEADO_JA_RESPONDEU"
+                item["proxima_acao"] = "Resposta registrada anteriormente; revisar manualmente."
+                item["_consent_ok"] = False
             if item.get("_consent_ok"):
                 for field in human_fields:
                     previous = old_norm.get(field)
                     if previous not in (None, ""):
                         item[field] = previous
             else:
-                # Never retain an old copy-ready message if authorization is missing or revoked.
+                # Never retain an old copy-ready message if authorization is missing/revoked.
                 for field in human_fields - {"status_revisao", "nota_revisor"}:
                     item[field] = ""
-                item["status_revisao"] = planned["status_revisao"]
-                item["proxima_acao"] = planned["proxima_acao"]
+                item["status_revisao"] = item["status_revisao"]
+                item["proxima_acao"] = item["proxima_acao"]
     planned_phones = {item["telefone"] for item in planned_rows}
     for phone, old in old_by_phone.items():
         if phone in planned_phones:
