@@ -5,6 +5,7 @@ import hmac
 import html
 import io
 import logging
+import secrets
 from datetime import datetime
 from urllib.parse import parse_qs, urlencode
 
@@ -26,6 +27,7 @@ DEFAULT_TEMPLATE = (
     "Se preferir não receber mensagens, responda SAIR."
 )
 PAGE_SIZE = 30
+CSRF_TOKEN = secrets.token_urlsafe(32)
 
 
 def _e(value: object) -> str:
@@ -35,6 +37,16 @@ def _e(value: object) -> str:
 def _form_values(body: bytes) -> dict[str, str]:
     parsed = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=True)
     return {key: values[-1] if values else "" for key, values in parsed.items()}
+
+
+def _csrf_hidden() -> str:
+    return f'<input type="hidden" name="csrf_token" value="{_e(CSRF_TOKEN)}">'
+
+
+def _validate_csrf(form: dict[str, str]) -> None:
+    token = form.get("csrf_token", "")
+    if not token or not hmac.compare_digest(token, CSRF_TOKEN):
+        raise HTTPException(status_code=403, detail="Formulário expirado ou token de segurança inválido. Atualize a página e tente novamente.")
 
 
 def _layout(title: str, content: str) -> str:
@@ -87,6 +99,7 @@ def _generation_form(default_template: str) -> str:
     label_time = datetime.now().strftime("%d/%m/%Y %H:%M")
     return f"""
     <form method="post" action="/drafts/generate">
+      {_csrf_hidden()}
       <div class="row">
         <div><label for="batch_name">Nome do lote</label><input id="batch_name" name="batch_name" maxlength="120" required value="Prospecção {_e(label_time)}"></div>
         <div><label for="limit">Máximo de leads a preparar (1–{MAX_BATCH_LIMIT})</label><input id="limit" type="number" name="limit" min="1" max="{MAX_BATCH_LIMIT}" value="100" required></div>
@@ -222,6 +235,7 @@ def drafts_page(batch_id: int | None = None, page: int = 1, status: str = "all",
           </div>
           {unavailable}
           <form method="post" action="/drafts/{int(row["draft_id"])}/review">
+            {_csrf_hidden()}
             <label for="message-{int(row["draft_id"])}">Mensagem personalizada (pode editar)</label>
             <textarea id="message-{int(row["draft_id"])}" name="message_text" maxlength="4000" required>{_e(row["message_text"])}</textarea>
             <label for="note-{int(row["draft_id"])}">Nota interna (opcional)</label>
@@ -285,6 +299,7 @@ def drafts_page(batch_id: int | None = None, page: int = 1, status: str = "all",
 @app.post("/drafts/generate")
 async def generate_drafts(request: Request) -> RedirectResponse:
     form = _form_values(await request.body())
+    _validate_csrf(form)
     name = form.get("batch_name", "").strip()[:120] or "Lote sem nome"
     template = form.get("message_template", "").strip()
     niche_filter = form.get("niche_filter", "").strip()[:120]
@@ -351,6 +366,7 @@ async def generate_drafts(request: Request) -> RedirectResponse:
 @app.post("/drafts/{draft_id}/review")
 async def review_draft(draft_id: int, request: Request) -> RedirectResponse:
     form = _form_values(await request.body())
+    _validate_csrf(form)
     message = form.get("message_text", "").strip()
     status = form.get("status", "pending")
     review_note = form.get("review_note", "").strip()[:500] or None
