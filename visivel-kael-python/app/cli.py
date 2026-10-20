@@ -143,6 +143,9 @@ def main() -> None:
     prev.add_argument("--campaign-id", type=int, required=True)
     act = sub.add_parser("campaign-activate", help="Ativar campanha (envio real ainda tem travas adicionais)")
     act.add_argument("--campaign-id", type=int, required=True)
+    bd = sub.add_parser("browser-draft", help="Abrir um único contato autorizado no WhatsApp Web e preencher um rascunho para revisão manual")
+    bd.add_argument("--phone", required=True, help="Telefone registrado na base")
+    bd.add_argument("--message", required=True, help="Mensagem de rascunho; aceita {nome}, {empresa}, {nicho} e {cidade}")
     worker = sub.add_parser("worker", help="Executar o worker da fila")
     worker.add_argument("--once", action="store_true")
     serve = sub.add_parser("serve", help="Executar API de health check e webhook")
@@ -157,6 +160,9 @@ def main() -> None:
         elif args.command == "campaign-enroll": enroll(args.campaign_id)
         elif args.command == "queue-preview": preview(args.campaign_id)
         elif args.command == "campaign-activate": activate(args.campaign_id)
+        elif args.command == "browser-draft":
+            from .browser_assist import prepare_manual_draft
+            prepare_manual_draft(args.phone, args.message)
         elif args.command == "worker": run_worker(args.once)
         elif args.command == "serve":
             import uvicorn
@@ -165,3 +171,7 @@ def main() -> None:
     except Exception as exc:
         logging.error("Operação falhou: %s", exc)
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
