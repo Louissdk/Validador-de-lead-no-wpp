@@ -1,0 +1,10 @@
+{
+  "initial": "Olá, {nome}! Tudo bem? Sou da Visível. Ajudamos empresas como a {empresa} a melhorar sua presença digital e captar oportunidades. Faz sentido eu te enviar uma ideia rápida, sem compromisso? Se preferir não receber mensagens, responda SAIR.",
+  "follow_ups": [
+    {"days_after": 1, "text": "Oi, {nome}! Passando uma vez para saber se faz sentido conversar sobre a presença digital da {empresa}. Se não for o momento, tudo bem. Para encerrar os contatos, responda SAIR."},
+    {"days_after": 3, "text": "Olá, {nome}. Posso te mandar um exemplo objetivo de como a Visível pode ajudar negócios do segmento de {nicho}? Se não tiver interesse, responda SAIR e não enviaremos novas mensagens."},
+    {"days_after": 5, "text": "Oi, {nome}! Não quero tomar seu tempo. Quer que eu encerre o contato ou prefere receber a ideia que comentei? Responda SAIR para não receber mais mensagens."},
+    {"days_after": 7, "text": "Olá, {nome}. Último lembrete da minha parte: posso compartilhar uma sugestão para a {empresa}. Caso não queira contato, responda SAIR."},
+    {"days_after": 10, "text": "Oi, {nome}! Vou encerrar por aqui para não incomodar. Obrigado pelo tempo. Se não quiser receber futuras mensagens, responda SAIR."}
+  ]
+}
