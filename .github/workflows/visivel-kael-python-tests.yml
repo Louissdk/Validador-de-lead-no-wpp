@@ -1,0 +1,27 @@
+name: Visível KAEL Python tests
+on:
+  push:
+    branches: [main, "feat/**"]
+    paths:
+      - "visivel-kael-python/**"
+      - ".github/workflows/visivel-kael-python-tests.yml"
+  pull_request:
+    paths:
+      - "visivel-kael-python/**"
+      - ".github/workflows/visivel-kael-python-tests.yml"
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: visivel-kael-python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: visivel-kael-python/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: pytest -q
