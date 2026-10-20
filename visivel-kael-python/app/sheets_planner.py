@@ -353,8 +353,7 @@ def _rows_preserving_review(existing_rows: list[dict[str, str]], planned_rows: l
                 # Never retain an old copy-ready message if authorization is missing/revoked.
                 for field in human_fields - {"status_revisao", "nota_revisor"}:
                     item[field] = ""
-                item["status_revisao"] = item["status_revisao"]
-                item["proxima_acao"] = item["proxima_acao"]
+        merged.append(item)
     planned_phones = {item["telefone"] for item in planned_rows}
     for phone, old in old_by_phone.items():
         if phone in planned_phones:
@@ -363,7 +362,6 @@ def _rows_preserving_review(existing_rows: list[dict[str, str]], planned_rows: l
         carry = {header: normalized.get(_norm_header(header), "") for header in OUTPUT_HEADERS}
         if carry.get("telefone"):
             merged.append(carry)
-    merged = [dict(item) for item in planned_rows] + merged
     return merged
 
 
