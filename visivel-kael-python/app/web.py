@@ -322,6 +322,10 @@ async def generate_drafts(request: Request) -> RedirectResponse:
               AND l.consent_source IS NOT NULL AND l.consent_at IS NOT NULL
               AND l.replied_at IS NULL
               AND s.phone IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM draft_reviews existing
+                  WHERE existing.lead_id=l.id AND existing.status IN ('pending','approved')
+              )
               AND (%s='' OR l.niche ILIKE %s)
               AND (%s='' OR l.city ILIKE %s)
             ORDER BY l.id
