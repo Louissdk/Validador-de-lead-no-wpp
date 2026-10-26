@@ -49,7 +49,7 @@ Add-Content -LiteralPath $logPath -Encoding UTF8 -Value "Código de saída: $syn
 Add-Content -LiteralPath $logPath -Encoding UTF8 -Value "===== Fim da sincronização $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====="
 
 if ($syncExitCode -ne 0) {
-    Write-Error "Sincronização falhou com código $syncExitCode. Veja o log: $logPath"
+    Write-Host "ERRO: sincronização falhou com código $syncExitCode. Veja o log: $logPath" -ForegroundColor Red
     exit $syncExitCode
 }
 
