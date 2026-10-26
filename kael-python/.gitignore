@@ -1,0 +1,35 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+credentials.json
+*service-account*.json
+*credentials*.json
+*.pem
+*.key
+
+# Local data and state
+data/
+reports/
+logs/
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.csv
+*.xlsx
+*.lock
+
+# Python environments, caches and artifacts
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.bak
+*.failed_*.py
+*.zip
+.DS_Store
