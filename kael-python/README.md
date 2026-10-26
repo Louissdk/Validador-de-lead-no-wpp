@@ -26,6 +26,34 @@ Depois que o código completo estiver sincronizado, clone este repositório em q
 
 Preencha o arquivo local .env com a configuração do seu ambiente e coloque o arquivo de credenciais Google no caminho definido por GOOGLE_CREDS_FILE. Não compartilhe esses arquivos. Eles não fazem parte do repositório.
 
+## Sincronização automática no Windows
+
+Para manter a pasta `kael-python` do GitHub sincronizada com o projeto local sem executar o comando manualmente a cada alteração:
+
+1. Atualize o clone do repositório para receber os scripts mais recentes:
+
+       Set-Location "$HOME\Downloads\Validador-de-lead-no-wpp"
+       git pull origin main
+
+2. Instale a tarefa agendada:
+
+       Set-Location "$HOME\Downloads\Validador-de-lead-no-wpp"
+       .\kael-python\install_auto_sync.ps1
+
+Por padrão, a origem monitorada para publicação é `$HOME\Downloads\robo python\visivel-kael-python`. Se o projeto estiver em outro local, use o parâmetro `-Source` com o caminho correto.
+
+A tarefa tenta sincronizar a cada 30 minutos enquanto a sessão do Windows estiver aberta. Ela copia apenas os caminhos permitidos pelo sincronizador, roda `pytest` e faz commit/push somente se os testes passarem. O Git do computador precisa estar autenticado no GitHub para que o push funcione. Se o computador estiver desligado ou sem sessão disponível, a execução fica para quando a tarefa puder rodar novamente.
+
+Os logs ficam fora do repositório em `%LOCALAPPDATA%\KAEL\logs`. Para conferir a última execução:
+
+    Get-ScheduledTaskInfo -TaskName "KAEL GitHub Auto Sync"
+
+Para remover a tarefa automática:
+
+    Unregister-ScheduledTask -TaskName "KAEL GitHub Auto Sync" -Confirm:$false
+
+Isso sincroniza **código**, não executa o worker de leads nem atualiza a planilha Google. A execução operacional do KAEL continua sendo uma ação separada.
+
 ## Operação segura
 
 - A execução de planejamento e a gravação são operações distintas. Confira o comando e a aba de destino antes de usar --write.
@@ -33,7 +61,7 @@ Preencha o arquivo local .env com a configuração do seu ambiente e coloque o a
 - Mensagens comerciais continuam restritas às regras de autorização do projeto. Não habilite envio real por acidente.
 - O arquivo de estado SQLite é local. Não sincronize a pasta data, relatórios de leads, credenciais nem arquivos .env.
 
-## Atualizar o código publicado
+## Atualizar o código publicado manualmente
 
 Depois de alterar o projeto de origem, execute novamente:
 
